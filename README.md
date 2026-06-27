@@ -38,13 +38,8 @@ Messages that don't match any template are silently skipped.
 
 ### 4. Dashboard
 
-Parsed transactions are grouped by month and displayed with charts and summary metrics (total received, total sent, net amount, transaction count).
 
-## Quick Start
 
-```bash
-flutter pub get
-flutter run
-```
 
-Grant SMS permission when the app launches, and the dashboard will populate automatically from your M-Money messages.
+
+

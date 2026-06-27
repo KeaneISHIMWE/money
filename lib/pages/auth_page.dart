@@ -21,6 +21,7 @@ class _AuthPageState extends State<AuthPage> {
   bool _isLogin = true;
   bool _isLoading = false;
   bool _acceptedTerms = false;
+  bool _showPassword = false;
   String? _errorMessage;
 
   @override
@@ -209,24 +210,35 @@ class _AuthPageState extends State<AuthPage> {
                         ),
                         const SizedBox(height: 16),
                         TextFormField(
-                          controller: _passwordController,
-                          obscureText: true,
-                          decoration: InputDecoration(
-                            labelText: 'Password',
-                            prefixIcon: Icon(Icons.lock, color: c.primary),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                          ),
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Please enter a password';
-                            }
-                            if (value.length < 4) {
-                              return 'Password must be at least 4 characters';
-                            }
-                            return null;
-                          },
+                         controller: _passwordController,
+                         obscureText: !_showPassword,
+                         decoration: InputDecoration(
+                           labelText: 'Password',
+                           prefixIcon: Icon(Icons.lock, color: c.primary),
+                           suffixIcon: IconButton(
+                             icon: Icon(
+                               _showPassword ? Icons.visibility : Icons.visibility_off,
+                               color: c.primary,
+                             ),
+                             onPressed: () {
+                               setState(() {
+                                 _showPassword = !_showPassword;
+                               });
+                             },
+                           ),
+                           border: OutlineInputBorder(
+                             borderRadius: BorderRadius.circular(16),
+                           ),
+                         ),
+                         validator: (value) {
+                           if (value == null || value.isEmpty) {
+                             return 'Please enter a password';
+                           }
+                           if (value.length < 4) {
+                             return 'Password must be at least 4 characters';
+                           }
+                           return null;
+                         },
                         ),
                         const SizedBox(height: 18),
                         CheckboxListTile(
