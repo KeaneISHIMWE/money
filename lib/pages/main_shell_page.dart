@@ -4,10 +4,13 @@ import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
 import '../app_colors.dart';
 import '../models/transaction.dart';
 import '../services/auth_service.dart';
+import '../services/sms_loader_service.dart';
+import '../services/transaction_service.dart';
 import '../widgets/app_shell_header.dart';
 import '../widgets/display_name_dialog.dart';
 import 'compare_page.dart';
 import 'dashboard_page.dart';
+import 'expenses_page.dart';
 import 'leaderboard_page.dart';
 import 'more_tab_page.dart';
 
@@ -25,19 +28,75 @@ class MainShellPage extends StatefulWidget {
   State<MainShellPage> createState() => _MainShellPageState();
 }
 
-class _MainShellPageState extends State<MainShellPage> {
+class _MainShellPageState extends State<MainShellPage>
+    with WidgetsBindingObserver {
   final AuthService _authService = AuthService();
+  final TransactionService _transactionService = TransactionService();
   int _tabIndex = 0;
   bool _isPublic = false;
   bool _isTogglingPublic = false;
   String _accountName = '';
+  bool _bootstrapComplete = false;
+  late List<SmsMessage> _messages;
+  final GlobalKey<DashboardPageState> _dashboardKey =
+      GlobalKey<DashboardPageState>();
 
   AppColors get _c => Theme.of(context).extension<AppColors>()!;
 
   @override
   void initState() {
     super.initState();
-    _loadProfile();
+    WidgetsBinding.instance.addObserver(this);
+    _messages = List<SmsMessage>.from(widget.messages);
+    _bootstrap();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        widget.firestoreSummaries == null) {
+      _refreshSms(fromResume: true);
+    }
+  }
+
+  Future<void> _refreshSms({bool fromResume = false}) async {
+    final fresh = await SmsLoaderService.loadMMoneyInbox();
+    if (!mounted || fresh.isEmpty) return;
+
+    final changed = fresh.length != _messages.length ||
+        (fresh.isNotEmpty &&
+            _messages.isNotEmpty &&
+            fresh.first.date != _messages.first.date);
+
+    if (!changed && fromResume) return;
+
+    setState(() => _messages = fresh);
+    _dashboardKey.currentState?.reloadFromMessages(fresh);
+    _transactionService.ingestSmsMessages(fresh).ignore();
+  }
+
+  void _handleMessagesRefreshed(List<SmsMessage> messages) {
+    setState(() => _messages = messages);
+    _dashboardKey.currentState?.reloadFromMessages(messages);
+  }
+
+  /// Loads profile first so the app opens quickly. Firestore sync runs in
+  /// the background — Expenses reads SMS directly while sync completes.
+  Future<void> _bootstrap() async {
+    await _loadProfile();
+
+    if (!mounted) return;
+    setState(() => _bootstrapComplete = true);
+
+    if (widget.firestoreSummaries == null && _messages.isNotEmpty) {
+      _transactionService.ingestSmsMessages(_messages).ignore();
+    }
   }
 
   Future<void> _loadProfile() async {
@@ -128,6 +187,25 @@ class _MainShellPageState extends State<MainShellPage> {
   Widget build(BuildContext context) {
     final c = _c;
 
+    if (!_bootstrapComplete) {
+      return Scaffold(
+        backgroundColor: c.bg,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: c.primary),
+              const SizedBox(height: 16),
+              Text(
+                'Loading...',
+                style: TextStyle(color: c.textSecondary),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: c.bg,
       body: Column(
@@ -142,11 +220,16 @@ class _MainShellPageState extends State<MainShellPage> {
               index: _tabIndex,
               children: [
                 DashboardPage(
-                  messages: widget.messages,
+                  key: _dashboardKey,
+                  messages: _messages,
                   firestoreSummaries: widget.firestoreSummaries,
                   embeddedInShell: true,
                   shellIsPublic: _isPublic,
                   onPublicStateChanged: (v) => setState(() => _isPublic = v),
+                ),
+                ExpensesPage(
+                  embeddedInShell: true,
+                  messages: _messages,
                 ),
                 const ComparePage(embeddedInShell: true),
                 const LeaderboardPage(embeddedInShell: true),
@@ -154,6 +237,8 @@ class _MainShellPageState extends State<MainShellPage> {
                   isPublic: _isPublic,
                   isTogglingPublic: _isTogglingPublic,
                   onPublicChanged: _handlePublicChanged,
+                  messages: _messages,
+                  onMessagesRefreshed: _handleMessagesRefreshed,
                 ),
               ],
             ),
@@ -175,6 +260,11 @@ class _MainShellPageState extends State<MainShellPage> {
             icon: Icon(Icons.home_outlined, color: c.textSecondary),
             selectedIcon: Icon(Icons.home_rounded, color: c.primary),
             label: 'Home',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.credit_card_outlined, color: c.textSecondary),
+            selectedIcon: Icon(Icons.credit_card_rounded, color: c.primary),
+            label: 'Expenses',
           ),
           NavigationDestination(
             icon: Icon(Icons.compare_arrows_outlined, color: c.textSecondary),

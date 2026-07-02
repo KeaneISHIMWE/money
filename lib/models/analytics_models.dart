@@ -157,10 +157,10 @@ class IncomeVsExpenseAnalysis {
 class CategoryStats {
   final String categoryId;
   final String categoryName;
-  final double totalSpent;
-  final int transactionCount;
-  final double percentage;
-  final double averageTransaction;
+  double totalSpent;
+  int transactionCount;
+  double percentage;
+  double averageTransaction;
 
   CategoryStats({
     required this.categoryId,
@@ -359,9 +359,9 @@ class LowBalancePeriod {
 
 class DailyTrend {
   final DateTime date;
-  final double totalSpent;
-  final double totalReceived;
-  final int transactionCount;
+  double totalSpent;
+  double totalReceived;
+  int transactionCount;
 
   DailyTrend({
     required this.date,

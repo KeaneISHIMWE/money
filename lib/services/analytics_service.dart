@@ -55,10 +55,10 @@ class AnalyticsService {
         final txn = EnhancedTransaction.fromFirestore(doc.data(), doc.id);
         if (txn != null) {
           if (txn.isSent) {
-            totalSpent += txn.amount;
+            totalSpent += txn.totalCost;
             sentCount++;
             byCategory.putIfAbsent(txn.category, () => 0);
-            byCategory[txn.category] = (byCategory[txn.category] ?? 0) + txn.amount;
+            byCategory[txn.category] = (byCategory[txn.category] ?? 0) + txn.totalCost;
           } else {
             totalReceived += txn.amount;
             receivedCount++;
@@ -131,8 +131,8 @@ class AnalyticsService {
       final totalIncome = summary.totalReceived;
       final totalExpenses = summary.totalSpent;
       final netCashFlow = totalIncome - totalExpenses;
-      final savingsRate = totalIncome > 0 ? (netCashFlow / totalIncome) * 100 : 0;
-      final spendingRate = 100 - savingsRate;
+      final savingsRate = totalIncome > 0 ? ((netCashFlow / totalIncome) * 100).toDouble() : 0.0;
+      final spendingRate = (100 - savingsRate).toDouble();
 
       return IncomeVsExpenseAnalysis(
         totalIncome: totalIncome,
@@ -171,7 +171,7 @@ class AnalyticsService {
       for (final doc in snapshot.docs) {
         final txn = EnhancedTransaction.fromFirestore(doc.data(), doc.id);
         if (txn != null) {
-          totalSpent += txn.amount;
+          totalSpent += txn.totalCost;
         }
       }
 
@@ -190,7 +190,7 @@ class AnalyticsService {
             ),
           );
 
-          stats.totalSpent += txn.amount;
+          stats.totalSpent += txn.totalCost;
           stats.transactionCount += 1;
         }
       }
@@ -246,7 +246,7 @@ class AnalyticsService {
         }
       }
 
-      final averageBalance = snapshot.docs.isNotEmpty ? totalBalance / snapshot.docs.length : 0;
+      final averageBalance = snapshot.docs.isNotEmpty ? (totalBalance / snapshot.docs.length).toDouble() : 0.0;
 
       return BalanceAnalysis(
         currentBalance: currentBalance,
@@ -366,7 +366,7 @@ class AnalyticsService {
             );
 
           if (txn.isSent) {
-            existing.totalSpent += txn.amount;
+            existing.totalSpent += txn.totalCost;
           } else {
             existing.totalReceived += txn.amount;
           }
@@ -386,12 +386,15 @@ class AnalyticsService {
 
   String _getCategoryName(String categoryId) {
     const categoryNames = {
-      'transfers': 'Transfers to Individuals',
-      'airtime': 'Airtime Purchases',
-      'internet': 'Internet/Data Bundles',
-      'utilities': 'Utility Payments',
-      'merchants': 'Merchant Payments',
-      'bank': 'Bank Transfers',
+      'normal_transfer': 'Normal Transfer',
+      'airtime': 'Airtime',
+      'bundle_and_pack': 'Bundle and Pack',
+      'payment': 'Payment',
+      'transfers': 'Normal Transfer',
+      'internet': 'Bundle and Pack',
+      'utilities': 'Payment',
+      'merchants': 'Payment',
+      'bank': 'Payment',
       'other': 'Other Expenses',
     };
     return categoryNames[categoryId] ?? 'Other';

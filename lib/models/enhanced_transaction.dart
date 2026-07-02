@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
 class EnhancedTransaction {
@@ -40,6 +41,9 @@ class EnhancedTransaction {
   bool get isReceived => type == 'RECEIVED';
   bool get isSent => type == 'SENT';
 
+  /// Total debited for outgoing transactions (transfer amount + fee).
+  double get totalCost => isSent ? amount + fee : amount;
+
   String get formattedDate => DateFormat('MMM dd, yyyy HH:mm').format(date);
   String get formattedAmount => NumberFormat('#,##0.00', 'en_US').format(amount);
   String get formattedBalance => NumberFormat('#,##0.00', 'en_US').format(balance);
@@ -63,13 +67,19 @@ class EnhancedTransaction {
     'updatedAt': updatedAt,
   };
 
+  static DateTime _parseTimestamp(dynamic value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    return DateTime.now();
+  }
+
   static EnhancedTransaction? fromFirestore(Map<String, dynamic> data, String docId) {
     try {
       return EnhancedTransaction(
         id: docId,
         userId: data['userId'] ?? '',
         amount: (data['amount'] as num?)?.toDouble() ?? 0.0,
-        date: (data['date'] as DateTime?) ?? DateTime.now(),
+        date: _parseTimestamp(data['date']),
         type: data['type'] ?? 'UNKNOWN',
         counterparty: data['counterparty'] ?? 'Unknown',
         counterpartyPhone: data['counterpartyPhone'],
@@ -80,8 +90,8 @@ class EnhancedTransaction {
         source: data['source'] ?? 'MANUAL',
         transactionId: data['transactionId'] ?? '',
         metadata: data['metadata'] as Map<String, dynamic>?,
-        createdAt: (data['createdAt'] as DateTime?) ?? DateTime.now(),
-        updatedAt: (data['updatedAt'] as DateTime?) ?? DateTime.now(),
+        createdAt: _parseTimestamp(data['createdAt']),
+        updatedAt: _parseTimestamp(data['updatedAt']),
       );
     } catch (e) {
       print('Error parsing EnhancedTransaction: $e');
@@ -101,23 +111,23 @@ class ExpenseCategory {
   final String color;
   final String icon;
   final double? monthlyBudget;
-  final DateTime createdAt;
+  final DateTime? createdAt;
 
-  ExpenseCategory({
+  const ExpenseCategory({
     required this.id,
     required this.name,
     required this.description,
     required this.color,
     required this.icon,
     this.monthlyBudget,
-    required this.createdAt,
+    this.createdAt,
   });
 
-  static const List<ExpenseCategory> defaults = [
+  static final List<ExpenseCategory> defaults = [
     ExpenseCategory(
-      id: 'transfers',
-      name: 'Transfers to Individuals',
-      description: 'Money sent to people',
+      id: 'normal_transfer',
+      name: 'Normal Transfer',
+      description: 'Money transferred to individuals',
       color: '#3498db',
       icon: 'person',
       monthlyBudget: null,
@@ -125,46 +135,28 @@ class ExpenseCategory {
     ),
     ExpenseCategory(
       id: 'airtime',
-      name: 'Airtime Purchases',
-      description: 'Mobile phone airtime',
+      name: 'Airtime',
+      description: 'Mobile phone airtime purchases',
       color: '#2ecc71',
       icon: 'phone',
       monthlyBudget: 10000,
       createdAt: null,
     ),
     ExpenseCategory(
-      id: 'internet',
-      name: 'Internet/Data Bundles',
-      description: 'Internet and data services',
+      id: 'bundle_and_pack',
+      name: 'Bundle and Pack',
+      description: 'Data and bundle purchases',
       color: '#e74c3c',
       icon: 'wifi',
       monthlyBudget: 15000,
       createdAt: null,
     ),
     ExpenseCategory(
-      id: 'utilities',
-      name: 'Utility Payments',
-      description: 'Electricity, water, gas bills',
-      color: '#f39c12',
-      icon: 'lightbulb',
-      monthlyBudget: 20000,
-      createdAt: null,
-    ),
-    ExpenseCategory(
-      id: 'merchants',
-      name: 'Merchant Payments',
-      description: 'Shops, stores, vendors',
+      id: 'payment',
+      name: 'Payment',
+      description: 'Merchant and bill payments',
       color: '#9b59b6',
       icon: 'shopping-cart',
-      monthlyBudget: null,
-      createdAt: null,
-    ),
-    ExpenseCategory(
-      id: 'bank',
-      name: 'Bank Transfers',
-      description: 'Bank and financial transfers',
-      color: '#34495e',
-      icon: 'bank',
       monthlyBudget: null,
       createdAt: null,
     ),

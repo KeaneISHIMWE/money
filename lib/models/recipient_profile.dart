@@ -4,9 +4,9 @@ class RecipientProfile {
   final String id;
   final String name;
   final String? phone;
-  final double totalAmountSent;
-  final int transactionCount;
-  final DateTime lastTransaction;
+  double totalAmountSent;
+  int transactionCount;
+  DateTime lastTransaction;
   final Map<String, RecipientMonthlyStats> monthlyStats;
   final DateTime lastUpdated;
 

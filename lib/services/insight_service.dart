@@ -1,9 +1,11 @@
+import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:uuid/uuid.dart';
-import '../models/insights.dart';
 import '../models/enhanced_transaction.dart';
+import '../models/insights.dart';
 import 'analytics_service.dart';
 import 'recipient_service.dart';
+
+String _newId() => '${DateTime.now().microsecondsSinceEpoch}_${Random().nextInt(99999)}';
 
 class InsightService {
   final FirebaseFirestore _firestore;
@@ -90,10 +92,10 @@ class InsightService {
       for (final doc in snapshot.docs) {
         final txn = EnhancedTransaction.fromFirestore(doc.data(), doc.id);
         if (txn != null) {
-          totalSpent += txn.amount;
+          totalSpent += txn.totalCost;
           categoryCount[txn.category] = (categoryCount[txn.category] ?? 0) + 1;
           recipientCount[txn.counterparty] = (recipientCount[txn.counterparty] ?? 0) + 1;
-          daySpending[txn.date.weekday] = (daySpending[txn.date.weekday] ?? 0) + txn.amount;
+          daySpending[txn.date.weekday] = (daySpending[txn.date.weekday] ?? 0) + txn.totalCost;
         }
       }
 
@@ -131,15 +133,11 @@ class InsightService {
       final pattern = 'Peak spending on ${dayNames[peakDay - 1]}s';
 
       final daysCount = end.difference(start).inDays;
-      final averageDailySpend = daysCount > 0 ? totalSpent / daysCount : 0;
-      final averageWeeklySpend = averageDailySpend * 7;
-      final averageMonthlySpend = averageDailySpend * 30;
+      final averageDailySpend = daysCount > 0 ? (totalSpent / daysCount).toDouble() : 0.0;
+      final averageWeeklySpend = (averageDailySpend * 7).toDouble();
+      final averageMonthlySpend = (averageDailySpend * 30).toDouble();
 
-      final recommendation = _generateSpendingRecommendation(
-        mostCommonCategory,
-        mostCommonRecipient,
-        averageMonthlySpend,
-      );
+      final recommendation = _generateSpendingRecommendation(mostCommonCategory, mostCommonRecipient, averageMonthlySpend);
 
       return SpendingHabits(
         mostCommonCategory: mostCommonCategory,
@@ -169,7 +167,7 @@ class InsightService {
       if (habits == null) return insights;
 
       insights.add(Insight(
-        id: const Uuid().v4(),
+        id: _newId(),
         type: 'spending_habit',
         title: 'Top Spending Category',
         description:
@@ -183,7 +181,7 @@ class InsightService {
       ));
 
       insights.add(Insight(
-        id: const Uuid().v4(),
+        id: _newId(),
         type: 'spending_habit',
         title: 'Daily Spending Average',
         description:
@@ -198,7 +196,7 @@ class InsightService {
       ));
 
       insights.add(Insight(
-        id: const Uuid().v4(),
+        id: _newId(),
         type: 'pattern',
         title: habits.pattern,
         description: 'Based on your transaction history, ${habits.pattern.toLowerCase()}.',
@@ -236,7 +234,7 @@ class InsightService {
         );
 
         insights.add(Insight(
-          id: const Uuid().v4(),
+          id: _newId(),
           type: 'recipient',
           title: 'Top Recipient',
           description:
@@ -260,7 +258,7 @@ class InsightService {
         final names = topThree.map((r) => r.name).join(', ');
 
         insights.add(Insight(
-          id: const Uuid().v4(),
+          id: _newId(),
           type: 'recipient',
           title: 'Top 3 Recipients',
           description:
@@ -293,7 +291,7 @@ class InsightService {
 
       if (lowBalanceStats != null && lowBalanceStats.timesBelow > 0) {
         insights.add(Insight(
-          id: const Uuid().v4(),
+          id: _newId(),
           type: 'alert',
           title: 'Low Balance Alert',
           description: lowBalanceStats.insight,
@@ -312,7 +310,7 @@ class InsightService {
       final balanceAnalysis = await analyticsService.getBalanceAnalysis();
       if (balanceAnalysis != null) {
         insights.add(Insight(
-          id: const Uuid().v4(),
+          id: _newId(),
           type: 'pattern',
           title: 'Current Balance Status: ${balanceAnalysis.balanceHealth}',
           description:
@@ -350,7 +348,7 @@ class InsightService {
       if (analysis != null) {
         if (analysis.savingsRate < 20) {
           insights.add(Insight(
-            id: const Uuid().v4(),
+            id: _newId(),
             type: 'recommendation',
             title: 'Increase Savings Rate',
             description:
@@ -364,7 +362,7 @@ class InsightService {
           ));
         } else if (analysis.savingsRate > 40) {
           insights.add(Insight(
-            id: const Uuid().v4(),
+            id: _newId(),
             type: 'recommendation',
             title: 'Excellent Savings Rate!',
             description:
@@ -384,12 +382,15 @@ class InsightService {
 
   String _getCategoryName(String categoryId) {
     const names = {
-      'transfers': 'Transfers to Individuals',
-      'airtime': 'Airtime Purchases',
-      'internet': 'Internet/Data Bundles',
-      'utilities': 'Utility Payments',
-      'merchants': 'Merchant Payments',
-      'bank': 'Bank Transfers',
+      'normal_transfer': 'Normal Transfer',
+      'airtime': 'Airtime',
+      'bundle_and_pack': 'Bundle and Pack',
+      'payment': 'Payment',
+      'transfers': 'Normal Transfer',
+      'internet': 'Bundle and Pack',
+      'utilities': 'Payment',
+      'merchants': 'Payment',
+      'bank': 'Payment',
       'other': 'Other Expenses',
     };
     return names[categoryId] ?? 'Other';

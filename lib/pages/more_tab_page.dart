@@ -1,20 +1,127 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
 
 import '../app_colors.dart';
+import '../services/sms_loader_service.dart';
+import '../services/sms_export_service.dart';
+import '../services/transaction_service.dart';
 import '../theme_decorations.dart';
 import 'terms_page.dart';
 
-class MoreTabPage extends StatelessWidget {
+class MoreTabPage extends StatefulWidget {
   final bool isPublic;
   final bool isTogglingPublic;
   final ValueChanged<bool> onPublicChanged;
+  final List<SmsMessage> messages;
+  final ValueChanged<List<SmsMessage>>? onMessagesRefreshed;
 
   const MoreTabPage({
     super.key,
     required this.isPublic,
     required this.isTogglingPublic,
     required this.onPublicChanged,
+    this.messages = const [],
+    this.onMessagesRefreshed,
   });
+
+  @override
+  State<MoreTabPage> createState() => _MoreTabPageState();
+}
+
+class _MoreTabPageState extends State<MoreTabPage> {
+  bool _exportingSms = false;
+  bool _refreshingSms = false;
+
+  Future<void> _refreshSmsAndSync() async {
+    if (_refreshingSms) return;
+    setState(() => _refreshingSms = true);
+
+    final c = Theme.of(context).extension<AppColors>()!;
+
+    try {
+      final messages = await SmsLoaderService.loadMMoneyInbox();
+      if (messages.isEmpty) {
+        throw StateError('No M-Money SMS found on this device.');
+      }
+
+      widget.onMessagesRefreshed?.call(messages);
+      await TransactionService().ingestSmsMessages(messages);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: c.success,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Reloaded ${messages.length} SMS and synced to Firestore.',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: c.danger,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Refresh failed: $e',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _refreshingSms = false);
+    }
+  }
+
+  Future<void> _exportSms() async {
+    if (_exportingSms) return;
+    setState(() => _exportingSms = true);
+
+    final c = Theme.of(context).extension<AppColors>()!;
+
+    try {
+      final file = await SmsExportService().exportToDownloads();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: c.success,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Exported to ${file.path}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: c.danger,
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            'Export failed: $e',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _exportingSms = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,11 +148,11 @@ class MoreTabPage extends StatelessWidget {
         const SizedBox(height: 20),
         _SettingsCard(
           child: SwitchListTile(
-            value: isPublic,
-            onChanged: isTogglingPublic ? null : (v) => onPublicChanged(v),
+            value: widget.isPublic,
+            onChanged: widget.isTogglingPublic ? null : widget.onPublicChanged,
             secondary: Icon(
-              isPublic ? Icons.public_rounded : Icons.lock_rounded,
-              color: isPublic ? c.success : c.textSecondary,
+              widget.isPublic ? Icons.public_rounded : Icons.lock_rounded,
+              color: widget.isPublic ? c.success : c.textSecondary,
             ),
             title: Text(
               'Public profile',
@@ -55,12 +162,38 @@ class MoreTabPage extends StatelessWidget {
               ),
             ),
             subtitle: Text(
-              isPublic
+              widget.isPublic
                   ? 'Monthly totals are visible on the leaderboard and compare tab.'
                   : 'Only you can see your data. Turn on to compare with others.',
               style: TextStyle(color: c.textSecondary, fontSize: 12),
             ),
             activeThumbColor: c.primary,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _SettingsCard(
+          child: _SettingsTile(
+            icon: Icons.sync_rounded,
+            iconColor: c.success,
+            title: 'Refresh SMS & sync',
+            subtitle: _refreshingSms
+                ? 'Reloading inbox...'
+                : 'Re-read all M-Money SMS and update Firestore totals',
+            onTap: _refreshingSms ? () {} : _refreshSmsAndSync,
+            showChevron: !_refreshingSms,
+          ),
+        ),
+        const SizedBox(height: 12),
+        _SettingsCard(
+          child: _SettingsTile(
+            icon: Icons.sms_outlined,
+            iconColor: c.primary,
+            title: 'Export SMS',
+            subtitle: _exportingSms
+                ? 'Exporting...'
+                : 'Save M-Money & ${SmsExportService.defaultPhone} SMS to Downloads',
+            onTap: _exportingSms ? () {} : _exportSms,
+            showChevron: !_exportingSms,
           ),
         ),
         const SizedBox(height: 12),

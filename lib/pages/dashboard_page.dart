@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
+import 'package:cloud_firestore/cloud_firestore.dart' hide Transaction;
 import 'package:intl/intl.dart';
 import '../app_colors.dart';
 import '../theme_decorations.dart';
 import '../models/transaction.dart';
+import '../models/enhanced_transaction.dart';
 import '../services/auth_service.dart';
+import '../services/transaction_service.dart';
 import '../widgets/display_name_dialog.dart';
+import '../widgets/category_breakdown_widget.dart';
+import '../widgets/top_recipients_widget.dart';
 
 class DashboardPage extends StatefulWidget {
   final List<SmsMessage> messages;
@@ -25,23 +30,26 @@ class DashboardPage extends StatefulWidget {
   });
 
   @override
-  State<DashboardPage> createState() => _DashboardPageState();
+  State<DashboardPage> createState() => DashboardPageState();
 }
 
-class _DashboardPageState extends State<DashboardPage>
+class DashboardPageState extends State<DashboardPage>
     with TickerProviderStateMixin {
   late List<Transaction> _transactions;
   late List<MonthlyTransactionSummary> _monthlySummaries;
+  List<EnhancedTransaction> _enhancedTransactions = [];
   int _selectedMonthIndex = 0;
   int _selectedProgressMonthIndex = 0;
   late AnimationController _animationController;
   late AnimationController _staggerController;
   late ScrollController _scrollController;
   bool _showTargetLine = true;
+  bool _loadingEnhancedTransactions = true;
 
   late Animation<double> _bgAnimation;
 
   final AuthService _authService = AuthService();
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
   bool _isPublic = false;
   String _accountName = '';
   bool _promptedForName = false;
@@ -246,6 +254,10 @@ class _DashboardPageState extends State<DashboardPage>
         _syncPublicSummaries().ignore();
       }
     }
+    if (widget.firestoreSummaries == null &&
+        widget.messages.length != oldWidget.messages.length) {
+      _processTransactions();
+    }
   }
 
   @override
@@ -274,11 +286,18 @@ class _DashboardPageState extends State<DashboardPage>
     });
 
     _loadPublicState();
+    _loadEnhancedTransactions();
     if (!widget.embeddedInShell) {
       _loadAccountName();
     } else if (widget.shellIsPublic != null) {
       _isPublic = widget.shellIsPublic!;
     }
+  }
+
+  /// Rebuilds monthly totals from a fresh SMS inbox and pushes to Firestore.
+  void reloadFromMessages(List<SmsMessage> messages) {
+    if (widget.firestoreSummaries != null || messages.isEmpty) return;
+    _processTransactionsFromMessages(messages);
   }
 
   Future<void> _loadAccountName() async {
@@ -363,6 +382,51 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  Future<void> _loadEnhancedTransactions() async {
+    try {
+      final phone = await _authService.getCurrentUserPhone();
+      if (phone == null) {
+        if (!mounted) return;
+        setState(() => _loadingEnhancedTransactions = false);
+        return;
+      }
+
+      var enhanced = <EnhancedTransaction>[];
+
+      try {
+        final snap = await _db
+            .collection('users')
+            .doc(phone)
+            .collection('transactions')
+            .orderBy('date', descending: true)
+            .limit(500)
+            .get();
+
+        enhanced = snap.docs
+            .map((doc) => EnhancedTransaction.fromFirestore(doc.data(), doc.id))
+            .whereType<EnhancedTransaction>()
+            .toList();
+      } catch (e) {
+        print('Error loading enhanced transactions from Firestore: $e');
+      }
+
+      if (enhanced.isEmpty && widget.messages.isNotEmpty) {
+        enhanced = TransactionService()
+            .enhancedFromSmsMessages(widget.messages, phone);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _enhancedTransactions = enhanced;
+        _loadingEnhancedTransactions = false;
+      });
+    } catch (e) {
+      print('Error loading enhanced transactions: $e');
+      if (!mounted) return;
+      setState(() => _loadingEnhancedTransactions = false);
+    }
+  }
+
   @override
   void dispose() {
     _animationController.dispose();
@@ -372,6 +436,10 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _processTransactions() {
+    _processTransactionsFromMessages(widget.messages);
+  }
+
+  void _processTransactionsFromMessages(List<SmsMessage> messages) {
     final firestoreSummaries = widget.firestoreSummaries;
     if (firestoreSummaries != null) {
       _monthlySummaries = List<MonthlyTransactionSummary>.from(
@@ -379,10 +447,11 @@ class _DashboardPageState extends State<DashboardPage>
       )..sort((a, b) => a.month.compareTo(b.month));
       _transactions = _transactionsFromSummaries(_monthlySummaries);
       _selectCurrentMonth();
+      if (mounted) setState(() {});
       return;
     }
 
-    _transactions = widget.messages
+    _transactions = messages
         .map(
           (msg) =>
               Transaction.fromSmsMessage(msg.body ?? '', smsDate: msg.date),
@@ -412,7 +481,7 @@ class _DashboardPageState extends State<DashboardPage>
 
       final sentAmount = entry.value
           .where((t) => t.type == 'SENT')
-          .fold<double>(0, (sum, t) => sum + t.amount);
+          .fold<double>(0, (sum, t) => sum + t.totalCost);
 
       return MonthlyTransactionSummary(
         month: entry.key,
@@ -433,6 +502,8 @@ class _DashboardPageState extends State<DashboardPage>
     if (_isPublic && _monthlySummaries.isNotEmpty) {
       _syncPublicSummaries().ignore();
     }
+
+    if (mounted) setState(() {});
   }
 
   List<Transaction> _transactionsFromSummaries(
@@ -554,6 +625,32 @@ class _DashboardPageState extends State<DashboardPage>
                             delay: const Duration(milliseconds: 350),
                             child: _buildTopSendersCard(),
                           ),
+                          const SizedBox(height: 24),
+                          // Analytics Dashboard Widgets
+                          if (!_loadingEnhancedTransactions && _enhancedTransactions.isNotEmpty)
+                            _ScrollAnimatedComponent(
+                              scrollController: _scrollController,
+                              delay: const Duration(milliseconds: 400),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                child: CategoryBreakdownWidget(
+                                  transactions: _enhancedTransactions,
+                                ),
+                              ),
+                            ),
+                          if (!_loadingEnhancedTransactions && _enhancedTransactions.isNotEmpty)
+                            const SizedBox(height: 24),
+                          if (!_loadingEnhancedTransactions && _enhancedTransactions.isNotEmpty)
+                            _ScrollAnimatedComponent(
+                              scrollController: _scrollController,
+                              delay: const Duration(milliseconds: 450),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                child: TopRecipientsWidget(
+                                  transactions: _enhancedTransactions,
+                                ),
+                              ),
+                            ),
                           SizedBox(
                             height: widget.embeddedInShell ? 88 : 24,
                           ),
@@ -1369,13 +1466,41 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  Widget _buildChartLegendDot(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: textSecondary,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildTransactionChart() {
     if (_monthlySummaries.isEmpty) return const SizedBox.shrink();
 
     final targetValue = nextMonthTarget['target'] as double;
-    final maxDataValue = _monthlySummaries
-        .map((s) => s.totalReceived)
-        .reduce((a, b) => a > b ? a : b);
+    final maxDataValue = _monthlySummaries.fold<double>(0, (max, summary) {
+      final monthMax = summary.totalReceived > summary.totalSent
+          ? summary.totalReceived
+          : summary.totalSent;
+      return monthMax > max ? monthMax : max;
+    });
     final maxY = _showTargetLine
         ? [maxDataValue, targetValue].reduce((a, b) => a > b ? a : b) * 1.15
         : maxDataValue * 1.15;
@@ -1390,7 +1515,7 @@ class _DashboardPageState extends State<DashboardPage>
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Income Trend',
+                  'Income vs Spending',
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
                     color: textPrimary,
@@ -1478,6 +1603,14 @@ class _DashboardPageState extends State<DashboardPage>
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                _buildChartLegendDot(successColor, 'Income'),
+                const SizedBox(width: 16),
+                _buildChartLegendDot(dangerColor, 'Spending'),
+              ],
+            ),
             const SizedBox(height: 16),
             SizedBox(
               height: 250,
@@ -1552,11 +1685,7 @@ class _DashboardPageState extends State<DashboardPage>
                     ),
                   ),
                   borderData: FlBorderData(show: false),
-                  minY:
-                      _monthlySummaries
-                          .map((s) => s.totalReceived)
-                          .reduce((a, b) => a < b ? a : b) *
-                      0.7,
+                  minY: 0,
                   maxY: maxY,
                   extraLinesData: ExtraLinesData(
                     horizontalLines: _showTargetLine
@@ -1596,7 +1725,7 @@ class _DashboardPageState extends State<DashboardPage>
                       isCurved: true,
                       curveSmoothness: 0.35,
                       preventCurveOverShooting: true,
-                      color: primaryColor,
+                      color: successColor,
                       barWidth: 2.4,
                       isStrokeCapRound: true,
                       dotData: FlDotData(
@@ -1606,13 +1735,34 @@ class _DashboardPageState extends State<DashboardPage>
                             radius: 4,
                             color: _isDark ? Colors.white : cardColor,
                             strokeWidth: 2,
-                            strokeColor: primaryColor,
+                            strokeColor: successColor,
                           );
                         },
                       ),
-                      belowBarData: BarAreaData(
+                    ),
+                    LineChartBarData(
+                      spots: _monthlySummaries.asMap().entries.map((entry) {
+                        return FlSpot(
+                          entry.key.toDouble(),
+                          entry.value.totalSent,
+                        );
+                      }).toList(),
+                      isCurved: true,
+                      curveSmoothness: 0.35,
+                      preventCurveOverShooting: true,
+                      color: dangerColor,
+                      barWidth: 2.4,
+                      isStrokeCapRound: true,
+                      dotData: FlDotData(
                         show: true,
-                        gradient: AppDecorations.chartAreaFill(primaryColor),
+                        getDotPainter: (spot, percent, barData, index) {
+                          return FlDotCirclePainter(
+                            radius: 4,
+                            color: _isDark ? Colors.white : cardColor,
+                            strokeWidth: 2,
+                            strokeColor: dangerColor,
+                          );
+                        },
                       ),
                     ),
                   ],
@@ -1626,9 +1776,13 @@ class _DashboardPageState extends State<DashboardPage>
                         vertical: 12,
                       ),
                       getTooltipItems: (touchedSpots) {
-                        return touchedSpots.map((spot) {
-                          final monthData = _monthlySummaries[spot.x.toInt()];
-                          return LineTooltipItem(
+                        if (touchedSpots.isEmpty) {
+                          return [];
+                        }
+                        final monthData =
+                            _monthlySummaries[touchedSpots.first.x.toInt()];
+                        return [
+                          LineTooltipItem(
                             '${DateFormat('MMM yyyy').format(monthData.month)}\n',
                             TextStyle(
                               color: textPrimary,
@@ -1637,16 +1791,26 @@ class _DashboardPageState extends State<DashboardPage>
                             ),
                             children: [
                               TextSpan(
-                                text: currencyFormat.format(spot.y),
+                                text:
+                                    'Income: ${currencyFormat.format(monthData.totalReceived)}\n',
                                 style: TextStyle(
-                                  color: primaryColor,
+                                  color: successColor,
                                   fontWeight: FontWeight.bold,
-                                  fontSize: 16,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              TextSpan(
+                                text:
+                                    'Spending: ${currencyFormat.format(monthData.totalSent)}',
+                                style: TextStyle(
+                                  color: dangerColor,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
                                 ),
                               ),
                             ],
-                          );
-                        }).toList();
+                          ),
+                        ];
                       },
                     ),
                   ),

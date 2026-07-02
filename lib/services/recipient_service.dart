@@ -116,7 +116,7 @@ class RecipientService {
       for (final doc in recipientSnapshot.docs) {
         final txn = EnhancedTransaction.fromFirestore(doc.data(), doc.id);
         if (txn != null) {
-          recipientTotal += txn.amount;
+          recipientTotal += txn.totalCost;
         }
       }
 
@@ -135,7 +135,7 @@ class RecipientService {
       for (final doc in totalSnapshot.docs) {
         final txn = EnhancedTransaction.fromFirestore(doc.data(), doc.id);
         if (txn != null) {
-          totalSent += txn.amount;
+          totalSent += txn.totalCost;
         }
       }
 
@@ -183,7 +183,7 @@ class RecipientService {
           }
 
           final recipient = recipientMap[key]!;
-          recipient['totalAmountSent'] += txn.amount;
+          recipient['totalAmountSent'] += txn.totalCost;
           recipient['transactionCount'] += 1;
 
           if (txn.date.isAfter(recipient['lastTransaction'] as DateTime)) {
@@ -201,7 +201,7 @@ class RecipientService {
           }
 
           final monthlyStat = monthlyStats[monthKey] as Map<String, dynamic>;
-          monthlyStat['totalAmount'] += txn.amount;
+          monthlyStat['totalAmount'] += txn.totalCost;
           monthlyStat['transactionCount'] += 1;
         }
       }
@@ -277,14 +277,14 @@ class RecipientService {
               id: txn.counterparty,
               name: txn.counterparty,
               phone: txn.counterpartyPhone,
-              totalAmountSent: txn.amount,
+              totalAmountSent: txn.totalCost,
               transactionCount: 1,
               lastTransaction: txn.date,
               monthlyStats: {},
               lastUpdated: DateTime.now(),
             );
           } else {
-            existing.totalAmountSent += txn.amount;
+            existing.totalAmountSent += txn.totalCost;
             existing.transactionCount += 1;
             if (txn.date.isAfter(existing.lastTransaction)) {
               existing.lastTransaction = txn.date;

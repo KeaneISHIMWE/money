@@ -11,6 +11,7 @@ import 'pages/main_shell_page.dart';
 import 'pages/auth_page.dart';
 import 'pages/terms_page.dart';
 import 'services/auth_service.dart';
+import 'services/sms_loader_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -180,7 +181,6 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  final SmsQuery _query = SmsQuery();
   List<SmsMessage> _messages = [];
   bool _hasPermission = false;
 
@@ -214,10 +214,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _getMessages() async {
-    final messages = await _query.querySms(
-      kinds: [SmsQueryKind.inbox],
-      address: 'M-Money',
-    );
+    final messages = await SmsLoaderService.loadMMoneyInbox();
     setState(() {
       _messages = messages;
     });
