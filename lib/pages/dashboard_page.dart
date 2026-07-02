@@ -1,17 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_sms_inbox/flutter_sms_inbox.dart';
-import 'package:cloud_firestore/cloud_firestore.dart' hide Transaction;
 import 'package:intl/intl.dart';
 import '../app_colors.dart';
 import '../theme_decorations.dart';
 import '../models/transaction.dart';
-import '../models/enhanced_transaction.dart';
 import '../services/auth_service.dart';
-import '../services/transaction_service.dart';
 import '../widgets/display_name_dialog.dart';
-import '../widgets/category_breakdown_widget.dart';
-import '../widgets/top_recipients_widget.dart';
 
 class DashboardPage extends StatefulWidget {
   final List<SmsMessage> messages;
@@ -37,19 +32,16 @@ class DashboardPageState extends State<DashboardPage>
     with TickerProviderStateMixin {
   late List<Transaction> _transactions;
   late List<MonthlyTransactionSummary> _monthlySummaries;
-  List<EnhancedTransaction> _enhancedTransactions = [];
   int _selectedMonthIndex = 0;
   int _selectedProgressMonthIndex = 0;
   late AnimationController _animationController;
   late AnimationController _staggerController;
   late ScrollController _scrollController;
   bool _showTargetLine = true;
-  bool _loadingEnhancedTransactions = true;
 
   late Animation<double> _bgAnimation;
 
   final AuthService _authService = AuthService();
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
   bool _isPublic = false;
   String _accountName = '';
   bool _promptedForName = false;
@@ -286,7 +278,6 @@ class DashboardPageState extends State<DashboardPage>
     });
 
     _loadPublicState();
-    _loadEnhancedTransactions();
     if (!widget.embeddedInShell) {
       _loadAccountName();
     } else if (widget.shellIsPublic != null) {
@@ -380,51 +371,6 @@ class DashboardPageState extends State<DashboardPage>
       _monthlySummaries,
       weeklySummaries: _weeklySummariesForPublicSync(),
     );
-  }
-
-  Future<void> _loadEnhancedTransactions() async {
-    try {
-      final phone = await _authService.getCurrentUserPhone();
-      if (phone == null) {
-        if (!mounted) return;
-        setState(() => _loadingEnhancedTransactions = false);
-        return;
-      }
-
-      var enhanced = <EnhancedTransaction>[];
-
-      try {
-        final snap = await _db
-            .collection('users')
-            .doc(phone)
-            .collection('transactions')
-            .orderBy('date', descending: true)
-            .limit(500)
-            .get();
-
-        enhanced = snap.docs
-            .map((doc) => EnhancedTransaction.fromFirestore(doc.data(), doc.id))
-            .whereType<EnhancedTransaction>()
-            .toList();
-      } catch (e) {
-        print('Error loading enhanced transactions from Firestore: $e');
-      }
-
-      if (enhanced.isEmpty && widget.messages.isNotEmpty) {
-        enhanced = TransactionService()
-            .enhancedFromSmsMessages(widget.messages, phone);
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _enhancedTransactions = enhanced;
-        _loadingEnhancedTransactions = false;
-      });
-    } catch (e) {
-      print('Error loading enhanced transactions: $e');
-      if (!mounted) return;
-      setState(() => _loadingEnhancedTransactions = false);
-    }
   }
 
   @override
@@ -625,32 +571,6 @@ class DashboardPageState extends State<DashboardPage>
                             delay: const Duration(milliseconds: 350),
                             child: _buildTopSendersCard(),
                           ),
-                          const SizedBox(height: 24),
-                          // Analytics Dashboard Widgets
-                          if (!_loadingEnhancedTransactions && _enhancedTransactions.isNotEmpty)
-                            _ScrollAnimatedComponent(
-                              scrollController: _scrollController,
-                              delay: const Duration(milliseconds: 400),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: CategoryBreakdownWidget(
-                                  transactions: _enhancedTransactions,
-                                ),
-                              ),
-                            ),
-                          if (!_loadingEnhancedTransactions && _enhancedTransactions.isNotEmpty)
-                            const SizedBox(height: 24),
-                          if (!_loadingEnhancedTransactions && _enhancedTransactions.isNotEmpty)
-                            _ScrollAnimatedComponent(
-                              scrollController: _scrollController,
-                              delay: const Duration(milliseconds: 450),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: TopRecipientsWidget(
-                                  transactions: _enhancedTransactions,
-                                ),
-                              ),
-                            ),
                           SizedBox(
                             height: widget.embeddedInShell ? 88 : 24,
                           ),

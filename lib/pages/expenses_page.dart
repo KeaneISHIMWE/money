@@ -28,11 +28,10 @@ class ExpensesPage extends StatefulWidget {
   });
 
   @override
-  State<ExpensesPage> createState() => _ExpensesPageState();
+  State<ExpensesPage> createState() => ExpensesPageState();
 }
 
-class _ExpensesPageState extends State<ExpensesPage>
-    with TickerProviderStateMixin {
+class ExpensesPageState extends State<ExpensesPage> {
   final AuthService _authService = AuthService();
   final TransactionService _transactionService = TransactionService();
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -57,7 +56,6 @@ class _ExpensesPageState extends State<ExpensesPage>
   int _selectedProgressMonthIndex = 0;
   bool _showTargetLine = true;
 
-  late AnimationController _staggerController;
   late ScrollController _scrollController;
 
   AppColors get _c => Theme.of(context).extension<AppColors>()!;
@@ -78,24 +76,32 @@ class _ExpensesPageState extends State<ExpensesPage>
   void initState() {
     super.initState();
     _scrollController = ScrollController();
-    _staggerController = AnimationController(
-      duration: const Duration(milliseconds: 1400),
-      vsync: this,
-    );
+    _loadData();
+  }
+
+  /// Reload when SMS inbox changes (same pattern as [DashboardPageState]).
+  void reloadFromMessages(List<SmsMessage> messages) {
+    if (!mounted) return;
     _loadData();
   }
 
   @override
   void didUpdateWidget(ExpensesPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.messages.length != oldWidget.messages.length) {
+    if (_messagesChanged(widget.messages, oldWidget.messages)) {
       _loadData();
     }
   }
 
+  bool _messagesChanged(List<SmsMessage> next, List<SmsMessage> previous) {
+    if (next.length != previous.length) return true;
+    if (next.isEmpty) return false;
+    return next.first.date != previous.first.date ||
+        next.last.date != previous.last.date;
+  }
+
   @override
   void dispose() {
-    _staggerController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -151,42 +157,40 @@ class _ExpensesPageState extends State<ExpensesPage>
 
     try {
       final phone = await _authService.getCurrentUserPhone();
-
-      if (phone == null) {
-        if (mounted) setState(() => _loading = false);
-        return;
-      }
-
-      // Show SMS data immediately — same source as the Home tab.
       var allTransactions = <EnhancedTransaction>[];
+
       if (widget.messages.isNotEmpty) {
+        final userId = phone ?? 'sms-local';
         allTransactions = _transactionService.enhancedFromSmsMessages(
           widget.messages,
-          phone,
+          userId,
         );
         if (mounted && allTransactions.isNotEmpty) {
           _applyTransactionData(allTransactions);
         }
       }
 
-      // Merge Firestore in the background; never block the UI on this.
-      try {
-        final firestoreTxns = await _loadEnhancedTransactions(phone).timeout(
-          const Duration(seconds: 8),
-        );
-        allTransactions = _mergeTransactions(firestoreTxns, allTransactions);
-      } on TimeoutException {
-        // Keep SMS-only data when Firestore is slow or offline.
-      } catch (e) {
-        print('Error loading Firestore transactions: $e');
+      if (phone != null) {
+        try {
+          final firestoreTxns = await _loadEnhancedTransactions(phone).timeout(
+            const Duration(seconds: 8),
+          );
+          allTransactions = _mergeTransactions(firestoreTxns, allTransactions);
+        } on TimeoutException {
+          // Keep SMS-only data when Firestore is slow or offline.
+        } catch (e) {
+          print('Error loading Firestore transactions: $e');
+        }
       }
 
       if (!mounted) return;
       _applyTransactionData(allTransactions);
-      _staggerController.forward(from: 0);
     } catch (e) {
       print('Error loading expense data: $e');
-      if (mounted) setState(() => _loading = false);
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -459,6 +463,14 @@ class _ExpensesPageState extends State<ExpensesPage>
     return ((_spendingSummary!.totalSpent - prev) / prev) * 100;
   }
 
+  /// Sent transactions for the selected period; falls back to all-time sent.
+  List<EnhancedTransaction> get _expenseTransactions {
+    final periodSent =
+        _periodTransactions.where((t) => t.isSent).toList(growable: false);
+    if (periodSent.isNotEmpty) return _periodTransactions;
+    return _allTransactions;
+  }
+
   @override
   Widget build(BuildContext context) {
     final body = _loading
@@ -482,91 +494,45 @@ class _ExpensesPageState extends State<ExpensesPage>
                 child: Column(
                   children: [
                     if (!widget.embeddedInShell) const SizedBox(height: 8),
-                    if (_monthlySummaries.isNotEmpty) ...[
-                      _CategorySection(
-                        staggerController: _staggerController,
-                        index: 0,
-                        child: _buildMonthProgressChart(),
-                      ),
-                      const SizedBox(height: 12),
-                      _CategorySection(
-                        staggerController: _staggerController,
-                        index: 1,
-                        child: _buildIncomeVsSpendingChart(),
-                      ),
-                      const SizedBox(height: 12),
-                      _CategorySection(
-                        staggerController: _staggerController,
-                        index: 2,
-                        child: _buildMonthlyExpensesList(),
-                      ),
-                      const SizedBox(height: 12),
-                      _CategorySection(
-                        staggerController: _staggerController,
-                        index: 3,
-                        child: _buildMonthlySummaryCard(),
-                      ),
-                      const SizedBox(height: 12),
-                      _CategorySection(
-                        staggerController: _staggerController,
-                        index: 4,
-                        child: _buildMetricCards(),
-                      ),
-                      const SizedBox(height: 12),
-                      _CategorySection(
-                        staggerController: _staggerController,
-                        index: 5,
-                        child: _buildNextMonthTargetCard(),
-                      ),
-                      const SizedBox(height: 12),
-                      if (_allTransactions.isNotEmpty)
-                        _CategorySection(
-                          staggerController: _staggerController,
-                          index: 6,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: TopRecipientsWidget(
-                              transactions: _allTransactions,
-                            ),
-                          ),
-                        ),
-                      if (_allTransactions.isNotEmpty) const SizedBox(height: 16),
-                    ],
                     _buildPeriodSelector(),
                     const SizedBox(height: 12),
                     _buildHeroCard(),
                     const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: CategoryBreakdownWidget(
+                        transactions: _expenseTransactions,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: TopRecipientsWidget(
+                        transactions: _expenseTransactions,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    if (_monthlySummaries.isNotEmpty) ...[
+                      _buildMonthProgressChart(),
+                      const SizedBox(height: 12),
+                      _buildIncomeVsSpendingChart(),
+                      const SizedBox(height: 12),
+                      _buildMonthlyExpensesList(),
+                      const SizedBox(height: 12),
+                      _buildMonthlySummaryCard(),
+                      const SizedBox(height: 12),
+                      _buildMetricCards(),
+                      const SizedBox(height: 12),
+                      _buildNextMonthTargetCard(),
+                      const SizedBox(height: 16),
+                    ],
                     _buildIncomeVsExpenseCard(),
                     const SizedBox(height: 12),
-                    if (_periodTransactions.isNotEmpty)
-                      _CategorySection(
-                        staggerController: _staggerController,
-                        index: 7,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: CategoryBreakdownWidget(
-                            transactions: _periodTransactions,
-                          ),
-                        ),
-                      ),
-                    if (_periodTransactions.isNotEmpty) const SizedBox(height: 12),
-                    _CategorySection(
-                      staggerController: _staggerController,
-                      index: 8,
-                      child: _buildQuickStatsCard(),
-                    ),
+                    _buildQuickStatsCard(),
                     const SizedBox(height: 12),
-                    _CategorySection(
-                      staggerController: _staggerController,
-                      index: 9,
-                      child: _buildLowBalanceCard(),
-                    ),
+                    _buildLowBalanceCard(),
                     const SizedBox(height: 12),
-                    _CategorySection(
-                      staggerController: _staggerController,
-                      index: 10,
-                      child: _buildInsightsCard(),
-                    ),
+                    _buildInsightsCard(),
                     SizedBox(height: widget.embeddedInShell ? 88 : 24),
                   ],
                 ),
@@ -1845,7 +1811,11 @@ class _ExpensesPageState extends State<ExpensesPage>
                 onTap: () {
                   if (_selectedPeriod == p.value) return;
                   setState(() => _selectedPeriod = p.value);
-                  _loadData();
+                  if (_allTransactions.isNotEmpty) {
+                    _applyTransactionData(_allTransactions);
+                  } else {
+                    _loadData();
+                  }
                 },
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
@@ -2692,41 +2662,5 @@ class _ExpensesPageState extends State<ExpensesPage>
       default:
         return primaryColor;
     }
-  }
-}
-
-class _CategorySection extends StatelessWidget {
-  final AnimationController staggerController;
-  final int index;
-  final Widget child;
-
-  const _CategorySection({
-    required this.staggerController,
-    required this.index,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final delay = (index * 100).toDouble();
-    final durationMs = staggerController.duration!.inMilliseconds;
-    final start = (delay / durationMs).clamp(0.0, 0.95);
-
-    return AnimatedBuilder(
-      animation: staggerController,
-      builder: (context, child) {
-        final t = ((staggerController.value - start) / (1.0 - start))
-            .clamp(0.0, 1.0);
-        final curved = Curves.easeOutCubic.transform(t);
-        return Transform.translate(
-          offset: Offset(0, 30 * (1 - curved)),
-          child: Opacity(
-            opacity: curved,
-            child: child,
-          ),
-        );
-      },
-      child: child,
-    );
   }
 }

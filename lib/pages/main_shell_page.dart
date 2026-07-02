@@ -40,6 +40,8 @@ class _MainShellPageState extends State<MainShellPage>
   late List<SmsMessage> _messages;
   final GlobalKey<DashboardPageState> _dashboardKey =
       GlobalKey<DashboardPageState>();
+  final GlobalKey<ExpensesPageState> _expensesKey =
+      GlobalKey<ExpensesPageState>();
 
   AppColors get _c => Theme.of(context).extension<AppColors>()!;
 
@@ -78,12 +80,14 @@ class _MainShellPageState extends State<MainShellPage>
 
     setState(() => _messages = fresh);
     _dashboardKey.currentState?.reloadFromMessages(fresh);
+    _expensesKey.currentState?.reloadFromMessages(fresh);
     _transactionService.ingestSmsMessages(fresh).ignore();
   }
 
   void _handleMessagesRefreshed(List<SmsMessage> messages) {
     setState(() => _messages = messages);
     _dashboardKey.currentState?.reloadFromMessages(messages);
+    _expensesKey.currentState?.reloadFromMessages(messages);
   }
 
   /// Loads profile first so the app opens quickly. Firestore sync runs in
@@ -228,6 +232,7 @@ class _MainShellPageState extends State<MainShellPage>
                   onPublicStateChanged: (v) => setState(() => _isPublic = v),
                 ),
                 ExpensesPage(
+                  key: _expensesKey,
                   embeddedInShell: true,
                   messages: _messages,
                 ),
@@ -247,7 +252,12 @@ class _MainShellPageState extends State<MainShellPage>
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _tabIndex,
-        onDestinationSelected: (index) => setState(() => _tabIndex = index),
+        onDestinationSelected: (index) {
+          setState(() => _tabIndex = index);
+          if (index == 1) {
+            _expensesKey.currentState?.reloadFromMessages(_messages);
+          }
+        },
         backgroundColor: c.card,
         indicatorColor: c.primary.withValues(alpha: 0.18),
         surfaceTintColor: Colors.transparent,
