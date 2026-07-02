@@ -78,96 +78,97 @@ class TopRecipientsWidget extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: topRecipients.length,
-              separatorBuilder: (_, __) => Divider(
-                color: c.cardBorder.withValues(alpha: 0.3),
-                height: 1,
-              ),
-              itemBuilder: (context, index) {
-                final recipient = topRecipients[index];
-                final percentage = (recipient.totalAmount / total * 100).toStringAsFixed(1);
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Row(
-                    children: [
-                      // Rank circle
-                      Container(
-                        width: 36,
-                        height: 36,
-                        decoration: BoxDecoration(
-                          color: c.primary.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(50),
-                        ),
-                        child: Center(
-                          child: Text(
-                            '${index + 1}',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              color: c.primary,
+            ...List.generate(topRecipients.length, (index) {
+              final recipient = topRecipients[index];
+              final percentage =
+                  (recipient.totalAmount / total * 100).toStringAsFixed(1);
+              final isLast = index == topRecipients.length - 1;
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: c.primary.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(50),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '${index + 1}',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: c.primary,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      // Name and transaction count
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                recipient.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: c.textPrimary,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '${recipient.count} transaction${recipient.count > 1 ? 's' : ''}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: c.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
                             Text(
-                              recipient.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                              NumberFormat.currency(
+                                symbol: '',
+                                decimalDigits: 0,
+                              ).format(recipient.totalAmount),
                               style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
                                 color: c.textPrimary,
                               ),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              '${recipient.count} transaction${recipient.count > 1 ? 's' : ''}',
+                              '$percentage%',
                               style: TextStyle(
                                 fontSize: 12,
-                                color: c.textSecondary,
+                                color: c.primary,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ],
                         ),
-                      ),
-                      // Amount and percentage
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            NumberFormat.currency(symbol: '', decimalDigits: 0)
-                                .format(recipient.totalAmount),
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: c.textPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '$percentage%',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: c.primary,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                );
-              },
-            ),
+                  if (!isLast)
+                    Divider(
+                      color: c.cardBorder.withValues(alpha: 0.3),
+                      height: 1,
+                    ),
+                ],
+              );
+            }),
           ],
         ),
       ),

@@ -64,9 +64,27 @@ class CategoryBreakdownWidget extends StatelessWidget {
       );
     }
 
-    final entries = categoryTotals.entries.toList()
+    final entries = categoryTotals.entries
+        .where((e) => e.value > 0)
+        .toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    final total = categoryTotals.values.fold<double>(0, (sum, v) => sum + v);
+    final total = entries.fold<double>(0, (sum, e) => sum + e.value);
+
+    if (entries.isEmpty || total <= 0) {
+      return Card(
+        color: c.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Center(
+            child: Text(
+              'No spending data available',
+              style: TextStyle(color: c.textSecondary),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Card(
       color: c.card,
@@ -89,23 +107,22 @@ class CategoryBreakdownWidget extends StatelessWidget {
               height: 200,
               child: PieChart(
                 PieChartData(
-                  sections: entries.asMap().entries.map((e) {
-                    final idx = e.key;
-                    final entry = e.value;
-                    final percentage = (entry.value / total * 100).toStringAsFixed(1);
+                  sections: entries.map((entry) {
+                    final percentage =
+                        (entry.value / total * 100).toStringAsFixed(1);
                     return PieChartSectionData(
                       color: _getCategoryColor(entry.key),
                       value: entry.value,
                       title: '$percentage%',
                       radius: 80,
-                      titleStyle: TextStyle(
+                      titleStyle: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
                       ),
                     );
                   }).toList(),
-                  centerSpaceRadius: 0,
+                  centerSpaceRadius: 40,
                   sectionsSpace: 2,
                 ),
               ),

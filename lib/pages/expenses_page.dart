@@ -31,7 +31,8 @@ class ExpensesPage extends StatefulWidget {
   State<ExpensesPage> createState() => ExpensesPageState();
 }
 
-class ExpensesPageState extends State<ExpensesPage> {
+class ExpensesPageState extends State<ExpensesPage>
+    with TickerProviderStateMixin {
   final AuthService _authService = AuthService();
   final TransactionService _transactionService = TransactionService();
   final FirebaseFirestore _db = FirebaseFirestore.instance;
@@ -41,7 +42,9 @@ class ExpensesPageState extends State<ExpensesPage> {
   );
 
   String _selectedPeriod = 'month';
-  bool _loading = true;
+  bool _loading = false;
+  bool _chartsReady = false;
+  bool _firestoreLoading = false;
 
   SpendingSummary? _spendingSummary;
   SpendingSummary? _previousPeriodSummary;
@@ -49,13 +52,13 @@ class ExpensesPageState extends State<ExpensesPage> {
   LowBalanceStats? _lowBalanceStats;
   SpendingHabits? _spendingHabits;
   List<Insight> _insights = [];
-  List<EnhancedTransaction> _periodTransactions = [];
   List<EnhancedTransaction> _allTransactions = [];
   List<MonthlyTransactionSummary> _monthlySummaries = [];
   int _selectedMonthIndex = 0;
   int _selectedProgressMonthIndex = 0;
   bool _showTargetLine = true;
 
+  late AnimationController _staggerController;
   late ScrollController _scrollController;
 
   AppColors get _c => Theme.of(context).extension<AppColors>()!;
@@ -76,32 +79,29 @@ class ExpensesPageState extends State<ExpensesPage> {
   void initState() {
     super.initState();
     _scrollController = ScrollController();
+    _staggerController = AnimationController(
+      duration: const Duration(milliseconds: 1400),
+      vsync: this,
+    );
     _loadData();
-  }
-
-  /// Reload when SMS inbox changes (same pattern as [DashboardPageState]).
-  void reloadFromMessages(List<SmsMessage> messages) {
-    if (!mounted) return;
-    _loadData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _chartsReady = true);
+      _staggerController.forward(from: 0);
+    });
   }
 
   @override
   void didUpdateWidget(ExpensesPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (_messagesChanged(widget.messages, oldWidget.messages)) {
-      _loadData();
+    if (widget.messages.length != oldWidget.messages.length) {
+      _loadData(showLoading: false);
     }
-  }
-
-  bool _messagesChanged(List<SmsMessage> next, List<SmsMessage> previous) {
-    if (next.length != previous.length) return true;
-    if (next.isEmpty) return false;
-    return next.first.date != previous.first.date ||
-        next.last.date != previous.last.date;
   }
 
   @override
   void dispose() {
+    _staggerController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -152,35 +152,48 @@ class ExpensesPageState extends State<ExpensesPage> {
     }
   }
 
-  Future<void> _loadData() async {
-    setState(() => _loading = true);
+  Future<void> _loadData({
+    List<SmsMessage>? messages,
+    bool showLoading = false,
+  }) async {
+    if (showLoading && mounted) {
+      setState(() => _loading = true);
+    }
 
     try {
       final phone = await _authService.getCurrentUserPhone();
-      var allTransactions = <EnhancedTransaction>[];
 
-      if (widget.messages.isNotEmpty) {
-        final userId = phone ?? 'sms-local';
+      if (phone == null) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
+
+      final smsMessages = messages ?? widget.messages;
+
+      // Show SMS data immediately — same source as the Home tab.
+      var allTransactions = <EnhancedTransaction>[];
+      if (smsMessages.isNotEmpty) {
         allTransactions = _transactionService.enhancedFromSmsMessages(
-          widget.messages,
-          userId,
+          smsMessages,
+          phone,
         );
         if (mounted && allTransactions.isNotEmpty) {
           _applyTransactionData(allTransactions);
         }
       }
 
-      if (phone != null) {
-        try {
-          final firestoreTxns = await _loadEnhancedTransactions(phone).timeout(
-            const Duration(seconds: 8),
-          );
-          allTransactions = _mergeTransactions(firestoreTxns, allTransactions);
-        } on TimeoutException {
-          // Keep SMS-only data when Firestore is slow or offline.
-        } catch (e) {
-          print('Error loading Firestore transactions: $e');
-        }
+      if (mounted) setState(() => _firestoreLoading = true);
+
+      // Merge Firestore in the background; never block the UI on this.
+      try {
+        final firestoreTxns = await _loadEnhancedTransactions(phone).timeout(
+          const Duration(seconds: 8),
+        );
+        allTransactions = _mergeTransactions(firestoreTxns, allTransactions);
+      } on TimeoutException {
+        // Keep SMS-only data when Firestore is slow or offline.
+      } catch (e) {
+        print('Error loading Firestore transactions: $e');
       }
 
       if (!mounted) return;
@@ -189,22 +202,54 @@ class ExpensesPageState extends State<ExpensesPage> {
       print('Error loading expense data: $e');
     } finally {
       if (mounted) {
-        setState(() => _loading = false);
+        setState(() {
+          _loading = false;
+          _firestoreLoading = false;
+        });
       }
+    }
+  }
+
+  /// Rebuilds expense analytics from a fresh SMS inbox.
+  void reloadFromMessages(List<SmsMessage> messages) {
+    if (messages.isEmpty) return;
+    _loadData(messages: messages, showLoading: false);
+  }
+
+  bool get _hasMonthlyChartData =>
+      _monthlySummaries.any((s) => s.totalReceived > 0 || s.totalSent > 0);
+
+  double _chartMaxY(double rawMax, {double? target}) {
+    final values = <double>[rawMax, if (target != null) target, 1.0];
+    final maxVal = values.reduce((a, b) => a > b ? a : b);
+    if (!maxVal.isFinite || maxVal <= 0) return 1.0;
+    return maxVal * 1.15;
+  }
+
+  Widget _safeSection(Widget Function() builder, {Widget? fallback}) {
+    try {
+      return builder();
+    } catch (e, st) {
+      debugPrint('Expenses section error: $e\n$st');
+      return fallback ??
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text(
+              'This section could not be displayed.',
+              style: TextStyle(color: textSecondary, fontSize: 13),
+            ),
+          );
     }
   }
 
   void _applyTransactionData(List<EnhancedTransaction> allTransactions) {
     final (start, end) = _getDateRange();
     final (prevStart, prevEnd) = _getPreviousDateRange();
-    final periodTransactions =
-        LocalAnalytics.filterByDateRange(allTransactions, start, end);
     final summaries = LocalAnalytics.monthlySummaries(allTransactions);
 
     setState(() {
       _allTransactions = allTransactions;
       _monthlySummaries = summaries;
-      _periodTransactions = periodTransactions;
       _spendingSummary = LocalAnalytics.spendingSummary(
         transactions: allTransactions,
         startDate: start,
@@ -463,82 +508,116 @@ class ExpensesPageState extends State<ExpensesPage> {
     return ((_spendingSummary!.totalSpent - prev) / prev) * 100;
   }
 
-  /// Sent transactions for the selected period; falls back to all-time sent.
-  List<EnhancedTransaction> get _expenseTransactions {
-    final periodSent =
-        _periodTransactions.where((t) => t.isSent).toList(growable: false);
-    if (periodSent.isNotEmpty) return _periodTransactions;
-    return _allTransactions;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final body = _loading
-        ? Center(
+    try {
+      return _buildPage(context);
+    } catch (e, st) {
+      debugPrint('Expenses page build failed: $e\n$st');
+      return ColoredBox(
+        color: bgColor,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                CircularProgressIndicator(color: primaryColor),
-                const SizedBox(height: 16),
+                Icon(Icons.error_outline, color: dangerColor, size: 40),
+                const SizedBox(height: 12),
                 Text(
-                  'Loading expenses...',
-                  style: TextStyle(color: textSecondary),
+                  'Expenses could not load',
+                  style: TextStyle(
+                    color: textPrimary,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Pull to refresh or switch tabs and try again.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: textSecondary, fontSize: 13),
                 ),
               ],
             ),
-          )
-        : CustomScrollView(
-            controller: _scrollController,
-            slivers: [
-              SliverToBoxAdapter(
-                child: Column(
-                  children: [
-                    if (!widget.embeddedInShell) const SizedBox(height: 8),
-                    _buildPeriodSelector(),
-                    const SizedBox(height: 12),
-                    _buildHeroCard(),
-                    const SizedBox(height: 12),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: CategoryBreakdownWidget(
-                        transactions: _expenseTransactions,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      child: TopRecipientsWidget(
-                        transactions: _expenseTransactions,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (_monthlySummaries.isNotEmpty) ...[
-                      _buildMonthProgressChart(),
-                      const SizedBox(height: 12),
-                      _buildIncomeVsSpendingChart(),
-                      const SizedBox(height: 12),
-                      _buildMonthlyExpensesList(),
-                      const SizedBox(height: 12),
-                      _buildMonthlySummaryCard(),
-                      const SizedBox(height: 12),
-                      _buildMetricCards(),
-                      const SizedBox(height: 12),
-                      _buildNextMonthTargetCard(),
-                      const SizedBox(height: 16),
-                    ],
-                    _buildIncomeVsExpenseCard(),
-                    const SizedBox(height: 12),
-                    _buildQuickStatsCard(),
-                    const SizedBox(height: 12),
-                    _buildLowBalanceCard(),
-                    const SizedBox(height: 12),
-                    _buildInsightsCard(),
-                    SizedBox(height: widget.embeddedInShell ? 88 : 24),
-                  ],
-                ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Widget _buildPage(BuildContext context) {
+    if (_loading) {
+      return ColoredBox(
+        color: bgColor,
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: primaryColor),
+              const SizedBox(height: 16),
+              Text(
+                'Loading expenses...',
+                style: TextStyle(color: textSecondary),
               ),
             ],
-          );
+          ),
+        ),
+      );
+    }
+
+    final body = RefreshIndicator(
+      color: primaryColor,
+      onRefresh: () => _loadData(showLoading: false),
+      child: ListView(
+        controller: _scrollController,
+        padding: EdgeInsets.only(
+          bottom: widget.embeddedInShell ? 88 : 24,
+        ),
+        children: [
+          if (!widget.embeddedInShell) const SizedBox(height: 8),
+          _safeSection(_buildPeriodSelector),
+          const SizedBox(height: 12),
+          _safeSection(_buildHeroCard),
+          const SizedBox(height: 12),
+          _safeSection(_buildIncomeVsExpenseCard),
+          const SizedBox(height: 12),
+          if (_allTransactions.isNotEmpty) ...[
+            _safeSection(_buildExpenseAnalyticsSection),
+            const SizedBox(height: 12),
+          ],
+          if (_firestoreLoading)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: LinearProgressIndicator(
+                color: primaryColor,
+                backgroundColor: cardBorder.withValues(alpha: 0.3),
+                minHeight: 2,
+              ),
+            ),
+          if (_firestoreLoading) const SizedBox(height: 12),
+          if (_chartsReady && _hasMonthlyChartData) ...[
+            _safeSection(_buildMonthProgressChart),
+            const SizedBox(height: 12),
+            _safeSection(_buildIncomeVsSpendingChart),
+            const SizedBox(height: 12),
+            _safeSection(_buildMonthlyExpensesList),
+            const SizedBox(height: 12),
+            _safeSection(_buildMonthlySummaryCard),
+            const SizedBox(height: 12),
+            _safeSection(_buildMetricCards),
+            const SizedBox(height: 12),
+            _safeSection(_buildNextMonthTargetCard),
+            const SizedBox(height: 16),
+          ],
+          _safeSection(_buildQuickStatsCard),
+          const SizedBox(height: 12),
+          _safeSection(_buildLowBalanceCard),
+          const SizedBox(height: 12),
+          _safeSection(_buildInsightsCard),
+        ],
+      ),
+    );
 
     if (widget.embeddedInShell) {
       return ColoredBox(color: bgColor, child: body);
@@ -552,6 +631,20 @@ class ExpensesPageState extends State<ExpensesPage> {
 
   Widget _buildGlassCard({required Widget child, EdgeInsets? margin}) {
     return AppGlassCard(margin: margin, child: child);
+  }
+
+  Widget _buildExpenseAnalyticsSection() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          CategoryBreakdownWidget(transactions: _allTransactions),
+          const SizedBox(height: 24),
+          TopRecipientsWidget(transactions: _allTransactions),
+        ],
+      ),
+    );
   }
 
   Widget _buildChartLegendDot(Color color, String label) {
@@ -590,8 +683,8 @@ class ExpensesPageState extends State<ExpensesPage> {
       return monthMax > max ? monthMax : max;
     });
     final maxY = _showTargetLine
-        ? [maxDataValue, targetValue].reduce((a, b) => a > b ? a : b) * 1.15
-        : maxDataValue * 1.15;
+        ? _chartMaxY(maxDataValue, target: targetValue)
+        : _chartMaxY(maxDataValue);
 
     return _buildGlassCard(
       child: Padding(
@@ -1811,11 +1904,7 @@ class ExpensesPageState extends State<ExpensesPage> {
                 onTap: () {
                   if (_selectedPeriod == p.value) return;
                   setState(() => _selectedPeriod = p.value);
-                  if (_allTransactions.isNotEmpty) {
-                    _applyTransactionData(_allTransactions);
-                  } else {
-                    _loadData();
-                  }
+                  _loadData();
                 },
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
